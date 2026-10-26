@@ -18,7 +18,7 @@ let busy=false;
 const login=document.createElement('div');login.className='panel hide';login.id='adminLogin';login.innerHTML='<h2>Entrar na administração</h2><form id="loginForm"><div class="grid"><label class="field">E-mail<input id="adminEmail" type="email" autocomplete="username" required></label><label class="field">Senha<input id="adminPassword" type="password" autocomplete="current-password" required></label></div><div class="actions"><button type="submit">Entrar</button><button type="button" class="secondary" id="logout">Sair</button></div></form><p class="muted" id="loginStatus"></p>';
 $('admin').parentNode.insertBefore(login,$('admin'));
 async function checkAdmin(){const {data:{user}}=await db.auth.getUser();if(!user){admin=false;return;}const {data,error}=await db.from('administradores').select('usuario_id').eq('usuario_id',user.id).maybeSingle();admin=!error&&!!data;}
-async function load(){const {data,error}=await db.from('produtos').select('*').order('id');if(error){message('Erro ao carregar produtos: '+error.message);return;}products=data.map(toLocal);cart={};render();renderCartBar();if(admin)renderAdmin();message('Conectado ao Supabase • Estoque compartilhado');}
+async function load(){const {data,error}=await db.from('produtos').select('*').order('id');if(error){message('Erro ao carregar produtos: '+error.message);return;}products=data.map(toLocal).sort((a,b)=>a.name.localeCompare(b.name,'pt-BR',{sensitivity:'base'}));cart={};render();renderCartBar();if(admin)renderAdmin();message('Conectado ao Supabase • Estoque compartilhado');}
 async function save(p){if(!admin)throw Error('Acesso não autorizado');const {error}=await db.from('produtos').update(toDb(p)).eq('id',p.id);if(error)throw error;await load();}
 function adminPage(){show('admin');$('admin').classList.toggle('hide',!admin);login.classList.toggle('hide',admin);if(admin)renderAdmin();}
 $('adminTab').onclick=async()=>{await checkAdmin();adminPage();};
@@ -65,5 +65,5 @@ $('sendWhatsapp').onclick=async()=>{if(busy)return;const t=receiptText();if(!t)r
 $('admin').querySelector('.panel .muted').textContent='Gerencie produtos e estoque sincronizados no Supabase. É necessário entrar com a conta administradora.';
 $('admin').querySelector('.notice').textContent='Ambiente de testes. Não compartilhe o link antes de validar as proteções contra pedidos falsos ou duplicados.';
 $('checkout').querySelector('.muted').textContent='O pedido ficará aguardando confirmação. O estoque só será descontado quando a loja confirmar a venda no ADM. Abra o WhatsApp e toque em Enviar.';
-await checkAdmin();await load();if(window.JANA_MODO_ADMIN){adminPage();}if(admin)loadOrders();
+await checkAdmin();await load();if(admin)loadOrders();
 })();
