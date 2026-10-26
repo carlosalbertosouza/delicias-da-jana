@@ -60,10 +60,24 @@ async function loadOrders(){if(!admin)return;orders.textContent='Carregando pedi
 orders.onclick=async e=>{const b=e.target.closest('button');if(!b)return;const id=Number(b.dataset.confirm||b.dataset.cancel||b.dataset.printOrder||b.dataset.copyOrder);const p=data.find(x=>x.id===id);if(!p)return;if(b.hasAttribute('data-print-order')){await imprimirBluetooth(p);return;}if(b.hasAttribute('data-copy-order')){try{await navigator.clipboard.writeText(receiptOrder(p));alert('Comanda copiada. Abra o RawBT para imprimir.')}catch{alert('Não foi possível copiar. Verifique as permissões do navegador.')}return;}const action=b.hasAttribute('data-confirm')?'confirmar':'cancelar';if(!confirm(action==='confirmar'?`Você recebeu o pedido #${id} pelo WhatsApp e quer confirmar a venda e descontar o estoque?`:`Cancelar pedido #${id}? Se já confirmado, o estoque será devolvido.`))return;b.disabled=true;const result=await db.rpc('alterar_status_pedido_cardapio',{p_pedido_id:id,p_acao:action});if(result.error)alert('Não foi possível alterar o pedido: '+result.error.message);await load();await loadOrders();};
 }
 refreshOrders.onclick=loadOrders;
-const oldAdminPage=adminPage;adminPage=function(){oldAdminPage();if(admin)loadOrders()};
-$('sendWhatsapp').onclick=async()=>{if(busy)return;const t=receiptText();if(!t)return;const entries=selected();if(!entries.length)return;const place=$('place').value.trim();if(!place)return alert('Informe o local de entrega ou retirada.');if(!confirm('Registrar pedido como AGUARDANDO CONFIRMAÇÃO e abrir o WhatsApp? O estoque não será descontado agora.'))return;busy=true;$('sendWhatsapp').disabled=true;try{const {data,error}=await db.rpc('criar_pedido_cardapio',{p_cliente:$('customer').value.trim(),p_local_entrega:place,p_pagamento:$('payment').value,p_observacoes:$('notes').value,p_itens:entries.map(({p,q})=>({produto_id:p.id,quantidade:q}))});if(error)throw error;const pedido=`PEDIDO #${data.pedido_id}\n${t}\n\nAguardando confirmação da loja.`;const link='https://wa.me/5513991384104?text='+encodeURIComponent(pedido);const opened=window.open(link,'_blank','noopener');if(!opened)window.location.href=link;cart={};await load();renderCheckout();renderCartBar();message('Pedido #'+data.pedido_id+' aguardando confirmação. Envie a mensagem no WhatsApp.');}catch(err){alert('Pedido não registrado: '+err.message);await load()}finally{busy=false;$('sendWhatsapp').disabled=false;}};
+const oldAdminPage=adminPage;adminPage=function(){oldAdminPage()};
+// Fluxo WhatsApp direto: abrir a conversa não registra pedido nem baixa estoque.
+// O WhatsApp não informa ao site se o usuário realmente enviou a mensagem.
+$('sendWhatsapp').onclick=async()=>{
+ if(busy)return;
+ const texto=receiptText();if(!texto)return;
+ const itens=selected();if(!itens.length)return;
+ if(itens.some(({p,q})=>!p.active||p.stock<q||p.price===null||p.price<=0)){
+  alert('Há produto indisponível, sem preço ou sem estoque. Atualize o carrinho.');return;
+ }
+ const link='https://wa.me/5513991384104?text='+encodeURIComponent(texto);
+ // A navegação deve partir do clique; sem RPC ou pop-up sujeito a bloqueio.
+ window.location.href=link;
+};
+// A administração de pedidos antigos permanece no banco, mas não faz parte do fluxo novo.
+$('ordersPanel').classList.add('hide');
 $('admin').querySelector('.panel .muted').textContent='Gerencie produtos e estoque sincronizados no Supabase. É necessário entrar com a conta administradora.';
 $('admin').querySelector('.notice').textContent='Ambiente de testes. Não compartilhe o link antes de validar as proteções contra pedidos falsos ou duplicados.';
-$('checkout').querySelector('.muted').textContent='O pedido ficará aguardando confirmação. O estoque só será descontado quando a loja confirmar a venda no ADM. Abra o WhatsApp e toque em Enviar.';
-await checkAdmin();await load();if(window.JANA_MODO_ADMIN){adminPage();}if(admin)loadOrders();
+$('checkout').querySelector('.muted').textContent='Ao tocar no botão, o WhatsApp abrirá com o pedido pronto. Toque em Enviar na conversa para encaminhá-lo à loja. Abrir o WhatsApp não reserva nem desconta estoque; a loja atualiza o estoque após confirmar a venda.';
+await checkAdmin();await load();if(window.JANA_MODO_ADMIN){adminPage();}
 })();
