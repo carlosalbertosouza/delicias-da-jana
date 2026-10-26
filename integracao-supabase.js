@@ -55,7 +55,44 @@ async function imprimirBluetooth(p){
   alert('Não foi possível imprimir pelo Bluetooth. Ligue a MY-7779 e execute INICIAR-IMPRESSORA.bat no notebook.\n\nDetalhes: '+err.message);
  }
 }
-function receiptOrder(p){return ['DELÍCIAS DA JANA',`PEDIDO #${p.id}`,'----------------------------',`Cliente: ${p.cliente}`,`Local: ${p.local_entrega}`,`Pagamento: ${p.pagamento}`,'----------------------------',...p.itens.map(i=>`${i.quantidade}x ${i.nome}\n   ${money(i.preco*i.quantidade)}`),'----------------------------',`TOTAL: ${money(p.total)}`,...(p.observacoes?[`Observações: ${p.observacoes}`]:[]),'----------------------------','Obrigada pela preferência!'].join('\n')}
+// Formata linhas para papel térmico estreito sem separar letras de palavras.
+function quebrarLinhaComanda(texto, largura=24){
+ const palavras=String(texto??'').trim().split(/\s+/).filter(Boolean);
+ const linhas=[];
+ let linha='';
+ for(const palavra of palavras){
+  if(linha && (linha.length+1+palavra.length)>largura){linhas.push(linha);linha='';}
+  if(palavra.length>largura){
+   if(linha){linhas.push(linha);linha='';}
+   for(let i=0;i<palavra.length;i+=largura)linhas.push(palavra.slice(i,i+largura));
+  }else{linha+=(linha?' ':'')+palavra;}
+ }
+ if(linha)linhas.push(linha);
+ return linhas.length?linhas:[''];
+}
+function receiptOrder(p){
+ const itens=(p.itens||[]).flatMap(i=>[
+  `${i.quantidade}x`,
+  ...quebrarLinhaComanda(i.nome),
+  `   ${money(Number(i.preco)*Number(i.quantidade))}`,
+  ''
+ ]);
+ return [
+  'DELÍCIAS DA JANA',
+  `PEDIDO #${p.id}`,
+  '------------------------',
+  ...quebrarLinhaComanda(`Cliente: ${p.cliente}`),
+  ...quebrarLinhaComanda(`Local: ${p.local_entrega}`),
+  ...quebrarLinhaComanda(`Pagamento: ${p.pagamento}`),
+  '------------------------',
+  ...itens,
+  '------------------------',
+  `TOTAL: ${money(p.total)}`,
+  ...(p.observacoes?[...quebrarLinhaComanda(`Observações: ${p.observacoes}`)]:[]),
+  '------------------------',
+  'Obrigada pela preferência!'
+ ].join('\n');
+}
 async function loadOrders(){if(!admin)return;orders.textContent='Carregando pedidos...';const {data,error}=await db.rpc('listar_pedidos_cardapio');if(error){orders.textContent='Erro ao consultar pedidos: '+error.message;return;}orders.innerHTML=(data||[]).length?data.map(p=>`<div class="adminrow"><div class="name"><strong>Pedido #${p.id} — ${escapeHTML(p.cliente)}</strong><small>${escapeHTML(new Date(p.criado_em).toLocaleString('pt-BR'))} • ${escapeHTML(p.status)}</small><small>${escapeHTML(p.local_entrega)} • ${escapeHTML(p.pagamento)}</small><small>${p.itens.map(i=>`${i.quantidade}× ${escapeHTML(i.nome)}`).join(' | ')}</small><small>Total: ${money(p.total)}</small></div><div class="actions">${p.status==='pendente'?`<button data-confirm="${p.id}">Confirmar venda</button>`:''}${p.status!=='cancelado'?`<button class="secondary" data-cancel="${p.id}">Cancelar</button>`:''}<button class="secondary" data-print-order="${p.id}" ${p.status!=='confirmado'?'disabled':''}>Imprimir comanda</button><button class="secondary" data-copy-order="${p.id}" ${p.status!=='confirmado'?'disabled':''}>Copiar para RawBT</button></div></div>`).join(''):'<p class="muted">Nenhum pedido recebido.</p>';
 orders.onclick=async e=>{const b=e.target.closest('button');if(!b)return;const id=Number(b.dataset.confirm||b.dataset.cancel||b.dataset.printOrder||b.dataset.copyOrder);const p=data.find(x=>x.id===id);if(!p)return;if(b.hasAttribute('data-print-order')){await imprimirBluetooth(p);return;}if(b.hasAttribute('data-copy-order')){try{await navigator.clipboard.writeText(receiptOrder(p));alert('Comanda copiada. Abra o RawBT para imprimir.')}catch{alert('Não foi possível copiar. Verifique as permissões do navegador.')}return;}const action=b.hasAttribute('data-confirm')?'confirmar':'cancelar';if(!confirm(action==='confirmar'?`Você recebeu o pedido #${id} pelo WhatsApp e quer confirmar a venda e descontar o estoque?`:`Cancelar pedido #${id}? Se já confirmado, o estoque será devolvido.`))return;b.disabled=true;const result=await db.rpc('alterar_status_pedido_cardapio',{p_pedido_id:id,p_acao:action});if(result.error)alert('Não foi possível alterar o pedido: '+result.error.message);await load();await loadOrders();};
 }
