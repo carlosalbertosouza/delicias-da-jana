@@ -95,6 +95,8 @@ function receiptOrder(p){
   'Obrigada pela preferência!'
  ].join('\n');
 }
+ // Rotinas do historico apenas quando os controles existem no ADM.
+ if ($('tabOrdersActive') && $('tabOrdersHistory') && $('ordersHistoryView') && $('ordersActiveView') && $('adminOrdersHistory') && orders && refreshOrders) {
  let pedidosCache=[];
  let abaHistorico=false;
  const historyView=$('ordersHistoryView');
@@ -165,9 +167,10 @@ function receiptOrder(p){
  historyList.onclick=acaoPedido;
 refreshOrders.onclick=loadOrders;
 const oldAdminPage=adminPage;adminPage=function(){oldAdminPage();if(admin)loadOrders()};
+ }
 $('sendWhatsapp').onclick=async()=>{if(busy)return;const t=receiptText();if(!t)return;const entries=selected();if(!entries.length)return;const place=$('place').value.trim();if(!place)return alert('Informe o local de entrega ou retirada.');if(!confirm('Registrar pedido como AGUARDANDO CONFIRMAÇÃO e abrir o WhatsApp? O estoque não será descontado agora.'))return;busy=true;$('sendWhatsapp').disabled=true;try{const {data,error}=await db.rpc('criar_pedido_cardapio',{p_cliente:$('customer').value.trim(),p_local_entrega:place,p_pagamento:$('payment').value,p_observacoes:$('notes').value,p_itens:entries.map(({p,q})=>({produto_id:p.id,quantidade:q}))});if(error)throw error;const pedido=`PEDIDO #${data.pedido_id}\n${t}\n\nAguardando confirmação da loja.`;const link='https://wa.me/5513991384104?text='+encodeURIComponent(pedido);const opened=window.open(link,'_blank','noopener');if(!opened)window.location.href=link;cart={};await load();renderCheckout();renderCartBar();message('Pedido #'+data.pedido_id+' aguardando confirmação. Envie a mensagem no WhatsApp.');}catch(err){alert('Pedido não registrado: '+err.message);await load()}finally{busy=false;$('sendWhatsapp').disabled=false;}};
-$('admin').querySelector('.panel .muted').textContent='Gerencie produtos e estoque sincronizados no Supabase. É necessário entrar com a conta administradora.';
-$('admin').querySelector('.notice').textContent='Ambiente de testes. Não compartilhe o link antes de validar as proteções contra pedidos falsos ou duplicados.';
-$('checkout').querySelector('.muted').textContent='O pedido ficará aguardando confirmação. O estoque só será descontado quando a loja confirmar a venda no ADM. Abra o WhatsApp e toque em Enviar.';
+if ($('admin').querySelector('.panel .muted')) $('admin').querySelector('.panel .muted').textContent='Gerencie produtos e estoque sincronizados no Supabase. É necessário entrar com a conta administradora.';
+if ($('admin').querySelector('.notice')) $('admin').querySelector('.notice').textContent='Ambiente de testes. Não compartilhe o link antes de validar as proteções contra pedidos falsos ou duplicados.';
+if ($('checkout').querySelector('.muted')) $('checkout').querySelector('.muted').textContent='O pedido ficará aguardando confirmação. O estoque só será descontado quando a loja confirmar a venda no ADM. Abra o WhatsApp e toque em Enviar.';
 await checkAdmin();await load();if(admin)loadOrders();
 })();
