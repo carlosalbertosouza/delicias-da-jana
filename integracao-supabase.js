@@ -51,8 +51,10 @@ async function imprimirBluetooth(p){
   const result=await response.json();
   if(!response.ok||!result.ok)throw new Error(result.erro||'Falha na impressão');
   alert('Comanda enviada à impressora Bluetooth MY-7779!');
+   return true;
  } catch(err){
   alert('Não foi possível imprimir pelo Bluetooth. Ligue a MY-7779 e execute INICIAR-IMPRESSORA.bat no notebook.\n\nDetalhes: '+err.message);
+   return false;
  }
 }
 // Formata linhas para papel térmico estreito sem separar letras de palavras.
@@ -93,9 +95,74 @@ function receiptOrder(p){
   'Obrigada pela preferência!'
  ].join('\n');
 }
-async function loadOrders(){if(!admin)return;orders.textContent='Carregando pedidos...';const {data,error}=await db.rpc('listar_pedidos_cardapio');if(error){orders.textContent='Erro ao consultar pedidos: '+error.message;return;}orders.innerHTML=(data||[]).length?data.map(p=>`<div class="adminrow"><div class="name"><strong>Pedido #${p.id} — ${escapeHTML(p.cliente)}</strong><small>${escapeHTML(new Date(p.criado_em).toLocaleString('pt-BR'))} • ${escapeHTML(p.status)}</small><small>${escapeHTML(p.local_entrega)} • ${escapeHTML(p.pagamento)}</small><small>${p.itens.map(i=>`${i.quantidade}× ${escapeHTML(i.nome)}`).join(' | ')}</small><small>Total: ${money(p.total)}</small></div><div class="actions">${p.status==='pendente'?`<button data-confirm="${p.id}">Confirmar venda</button>`:''}${p.status!=='cancelado'?`<button class="secondary" data-cancel="${p.id}">Cancelar</button>`:''}<button class="secondary" data-print-order="${p.id}" ${p.status!=='confirmado'?'disabled':''}>Imprimir comanda</button><button class="secondary" data-copy-order="${p.id}" ${p.status!=='confirmado'?'disabled':''}>Copiar para RawBT</button></div></div>`).join(''):'<p class="muted">Nenhum pedido recebido.</p>';
-orders.onclick=async e=>{const b=e.target.closest('button');if(!b)return;const id=Number(b.dataset.confirm||b.dataset.cancel||b.dataset.printOrder||b.dataset.copyOrder);const p=data.find(x=>x.id===id);if(!p)return;if(b.hasAttribute('data-print-order')){await imprimirBluetooth(p);return;}if(b.hasAttribute('data-copy-order')){try{await navigator.clipboard.writeText(receiptOrder(p));alert('Comanda copiada. Abra o RawBT para imprimir.')}catch{alert('Não foi possível copiar. Verifique as permissões do navegador.')}return;}const action=b.hasAttribute('data-confirm')?'confirmar':'cancelar';if(!confirm(action==='confirmar'?`Você recebeu o pedido #${id} pelo WhatsApp e quer confirmar a venda e descontar o estoque?`:`Cancelar pedido #${id}? Se já confirmado, o estoque será devolvido.`))return;b.disabled=true;const result=await db.rpc('alterar_status_pedido_cardapio',{p_pedido_id:id,p_acao:action});if(result.error)alert('Não foi possível alterar o pedido: '+result.error.message);await load();await loadOrders();};
-}
+ let pedidosCache=[];
+ let abaHistorico=false;
+ const historyView=$('ordersHistoryView');
+ const activeView=$('ordersActiveView');
+ const historyList=$('adminOrdersHistory');
+ function mudarAbaPedidos(historico){
+   abaHistorico=historico;
+   activeView.classList.toggle('hide',historico);
+   historyView.classList.toggle('hide',!historico);
+   $('tabOrdersActive').classList.toggle('secondary',historico);
+   $('tabOrdersHistory').classList.toggle('secondary',!historico);
+   $('tabOrdersActive').setAttribute('aria-pressed',String(!historico));
+   $('tabOrdersHistory').setAttribute('aria-pressed',String(historico));
+   renderPedidos();
+ }
+ $('tabOrdersActive').onclick=()=>mudarAbaPedidos(false);
+ $('tabOrdersHistory').onclick=()=>mudarAbaPedidos(true);
+ $('historySearch').oninput=renderPedidos;
+ $('historyDate').onchange=renderPedidos;
+ $('clearHistoryFilters').onclick=()=>{$('historySearch').value='';$('historyDate').value='';renderPedidos();};
+ function pedidoCard(p,historico){
+   const itens=Array.isArray(p.itens)?p.itens:[];
+   return `<div class="adminrow"><div class="name"><strong>Pedido #${p.id} — ${escapeHTML(p.cliente||'')}</strong><small>${escapeHTML(new Date(p.criado_em).toLocaleString('pt-BR'))} • ${escapeHTML(p.status)}</small><small>${escapeHTML(p.local_entrega||'')} • ${escapeHTML(p.pagamento||'')}</small><small>${itens.map(i=>`${i.quantidade}× ${escapeHTML(i.nome||'')}`).join(' | ')}</small><small>Total: ${money(p.total)}</small></div><div class="actions">${!historico&&p.status==='pendente'?`<button data-confirm="${p.id}">Confirmar venda</button>`:''}${!historico&&p.status!=='cancelado'?`<button class="secondary" data-cancel="${p.id}">Cancelar</button>`:''}<button class="secondary" data-print-order="${p.id}" ${p.status!=='confirmado'?'disabled':''}>${historico?'Reimprimir comanda':'Imprimir comanda'}</button><button class="secondary" data-copy-order="${p.id}" ${p.status!=='confirmado'?'disabled':''}>Copiar para RawBT</button></div></div>`;
+ }
+ function renderPedidos(){
+   const ativos=pedidosCache.filter(p=>p.status!=='cancelado'&&!p.arquivado_em);
+   orders.innerHTML=ativos.length?ativos.map(p=>pedidoCard(p,false)).join(''):'<p class="muted">Nenhum pedido aguardando atendimento.</p>';
+   const q=$('historySearch').value.trim().toLocaleLowerCase('pt-BR');
+   const dia=$('historyDate').value;
+   const historico=pedidosCache.filter(p=>(p.status==='cancelado'||!!p.arquivado_em)&&(!q||String(p.id).includes(q)||String(p.cliente||'').toLocaleLowerCase('pt-BR').includes(q))&&(!dia||String(p.criado_em||'').slice(0,10)===dia));
+   historyList.innerHTML=historico.length?historico.map(p=>pedidoCard(p,true)).join(''):'<p class="muted">Nenhum pedido encontrado no histórico.</p>';
+ }
+ async function loadOrders(){
+   if(!admin)return;
+   orders.textContent='Carregando pedidos...';
+   const {data,error}=await db.rpc('listar_pedidos_cardapio');
+   if(error){orders.textContent='Erro ao consultar pedidos: '+error.message;return;}
+   pedidosCache=Array.isArray(data)?data:[];
+   renderPedidos();
+ }
+ async function acaoPedido(e){
+   const b=e.target.closest('button');if(!b)return;
+   const id=Number(b.dataset.confirm||b.dataset.cancel||b.dataset.printOrder||b.dataset.copyOrder);
+   const p=pedidosCache.find(x=>x.id===id);if(!p)return;
+   if(b.hasAttribute('data-print-order')){
+     b.disabled=true;
+     try{
+       const enviado=await imprimirBluetooth(p);
+       if(enviado&&!p.arquivado_em&&p.status==='confirmado'){
+         const result=await db.rpc('arquivar_pedido_cardapio',{p_pedido_id:id});
+         if(result.error)alert('Comanda enviada, mas não foi possível mover para o Histórico: '+result.error.message);
+       }
+       await loadOrders();
+     }finally{b.disabled=false;}
+     return;
+   }
+   if(b.hasAttribute('data-copy-order')){
+     try{await navigator.clipboard.writeText(receiptOrder(p));alert('Comanda copiada. Abra o RawBT para imprimir.')}catch{alert('Não foi possível copiar. Verifique as permissões do navegador.')}return;
+   }
+   const action=b.hasAttribute('data-confirm')?'confirmar':'cancelar';
+   if(!confirm(action==='confirmar'?`Você recebeu o pedido #${id} pelo WhatsApp e quer confirmar a venda e descontar o estoque?`:`Cancelar pedido #${id}? Se já confirmado, o estoque será devolvido.`))return;
+   b.disabled=true;
+   const result=await db.rpc('alterar_status_pedido_cardapio',{p_pedido_id:id,p_acao:action});
+   if(result.error)alert('Não foi possível alterar o pedido: '+result.error.message);
+   await load();await loadOrders();
+ }
+ orders.onclick=acaoPedido;
+ historyList.onclick=acaoPedido;
 refreshOrders.onclick=loadOrders;
 const oldAdminPage=adminPage;adminPage=function(){oldAdminPage();if(admin)loadOrders()};
 $('sendWhatsapp').onclick=async()=>{if(busy)return;const t=receiptText();if(!t)return;const entries=selected();if(!entries.length)return;const place=$('place').value.trim();if(!place)return alert('Informe o local de entrega ou retirada.');if(!confirm('Registrar pedido como AGUARDANDO CONFIRMAÇÃO e abrir o WhatsApp? O estoque não será descontado agora.'))return;busy=true;$('sendWhatsapp').disabled=true;try{const {data,error}=await db.rpc('criar_pedido_cardapio',{p_cliente:$('customer').value.trim(),p_local_entrega:place,p_pagamento:$('payment').value,p_observacoes:$('notes').value,p_itens:entries.map(({p,q})=>({produto_id:p.id,quantidade:q}))});if(error)throw error;const pedido=`PEDIDO #${data.pedido_id}\n${t}\n\nAguardando confirmação da loja.`;const link='https://wa.me/5513991384104?text='+encodeURIComponent(pedido);const opened=window.open(link,'_blank','noopener');if(!opened)window.location.href=link;cart={};await load();renderCheckout();renderCartBar();message('Pedido #'+data.pedido_id+' aguardando confirmação. Envie a mensagem no WhatsApp.');}catch(err){alert('Pedido não registrado: '+err.message);await load()}finally{busy=false;$('sendWhatsapp').disabled=false;}};
